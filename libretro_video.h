@@ -6,13 +6,19 @@
 /* The last rectangle the VIDC presented, in a buffer owned by the core. */
 typedef struct {
   int valid;
-  const uint32_t* p_pixels;   /* XRGB8888, top-left of the visible rect */
+  const void* p_pixels;       /* top-left of the visible rect */
   size_t pitch;               /* bytes per row */
-  int w, h;
+  int bpp;                    /* 16 (RGB565) or 32 (XRGB8888) */
+  int w, h;                   /* as presented: w is halved for low-res modes when enabled */
   int dblscan;                /* guest asked for each line to be shown twice */
   uint64_t frame_count;       /* incremented on every present */
 } libretro_frame_t;
 
 extern libretro_frame_t libretro_frame;
+
+/* rgb565: convert at frame end instead of copying XRGB8888.
+ * native_lowres: present 8 and 12 MHz pixel-rate modes at one bitmap pixel
+ * per two, since the VIDC renderer doubles them horizontally. */
+void libretro_video_set_format(int rgb565, int native_lowres);
 
 #endif

@@ -185,10 +185,9 @@ static int s_display_mode;
 static char s_option_keys[k_num_pad_buttons][32];
 static char s_option_desc[k_num_pad_buttons][1024];
 static char s_machine_desc[256];
-static struct retro_variable s_variables[k_num_pad_buttons + 11];
+static struct retro_variable s_variables[k_num_pad_buttons + 12];
 static int s_rgb565;
 static int s_is_archive;       /* content is a Spark archive unpacked to HostFS */
-static uint16_t* s_frame565;   /* k_max_width * k_max_height, allocated once */
 
 static int
 key_from_name(const char* p_name) {
@@ -248,6 +247,9 @@ build_variables(void) {
   i++;
   s_variables[i].key = "arculator_pixel_format";
   s_variables[i].value = "Frame format (restart); RGB565|XRGB8888";
+  i++;
+  s_variables[i].key = "arculator_lowres_width";
+  s_variables[i].value = "Low-res mode width (restart); Native|Doubled";
   i++;
   s_variables[i].key = "arculator_display";
   s_variables[i].value = "Display area; No borders|Native borders|TV";
@@ -835,8 +837,7 @@ retro_load_game(const struct retro_game_info* info) {
   s_rgb565 = !strcmp(get_option("arculator_pixel_format", "RGB565"), "RGB565");
   if (s_rgb565) {
     fmt = RETRO_PIXEL_FORMAT_RGB565;
-    if (!s_frame565) s_frame565 = calloc((size_t) k_max_width * k_max_height, sizeof(uint16_t));
-    if (!s_frame565 || !environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt)) {
+    if (!environ_cb(RETRO_ENVIRONMENT_SET_PIXEL_FORMAT, &fmt)) {
       log_cb(RETRO_LOG_WARN, "arculator: RGB565 not available, using XRGB8888\n");
       s_rgb565 = 0;
       fmt = RETRO_PIXEL_FORMAT_XRGB8888;
@@ -902,6 +903,7 @@ retro_load_game(const struct retro_game_info* info) {
     unlink(s_tmp_cfg);
     s_tmp_cfg[0] = 0;
   }
+  libretro_video_set_format(s_rgb565, !strcmp(get_option("arculator_lowres_width", "Native"), "Native"));
   if (!video_renderer_init(NULL)) {
     log_cb(RETRO_LOG_ERROR, "arculator: video init failed\n");
     return false;
@@ -1109,10 +1111,20 @@ present(void) {
         f = fopen(name, "wb");
         if (f) {
           unsigned hdr[4] = { w, h, w * 4, 0 };
-          unsigned y;
+          unsigned y, x;
           fwrite(hdr, sizeof(hdr), 1, f);
           for (y = 0; y < h; ++y) {
-            fwrite((const uint8_t*) libretro_frame.p_pixels + y * libretro_frame.pitch, 4, w, f);
+            const uint8_t* row = (const uint8_t*) libretro_frame.p_pixels + y * libretro_frame.pitch;
+            if (libretro_frame.bpp == 32) {
+              fwrite(row, 4, w, f);
+            } else {
+              /* Expand RGB565 back to XRGB8888 so the dump format is one. */
+              for (x = 0; x < w; ++x) {
+                uint32_t p = ((const uint16_t*) row)[x];
+                uint32_t v = ((p & 0xf800) << 8) | ((p & 0x07e0) << 5) | ((p & 0x001f) << 3);
+                fwrite(&v, 4, 1, f);
+              }
+            }
           }
           fclose(f);
           log_cb(RETRO_LOG_INFO, "arculator: dumped frame %u (%ux%u) to %s\n", s_frame_count, w, h, name);
@@ -1120,19 +1132,6 @@ present(void) {
         if (!every) dumped = 1;
       }
     }
-  }
-  if (s_rgb565) {
-    unsigned y, x;
-    for (y = 0; y < h; ++y) {
-      const uint32_t* s = (const uint32_t*) ((const uint8_t*) libretro_frame.p_pixels + y * libretro_frame.pitch);
-      uint16_t* d = s_frame565 + (size_t) y * w;
-      for (x = 0; x < w; ++x) {
-        uint32_t p = s[x];
-        d[x] = (uint16_t) (((p >> 8) & 0xf800) | ((p >> 5) & 0x07e0) | ((p >> 3) & 0x001f));
-      }
-    }
-    video_cb(s_frame565, w, h, w * sizeof(uint16_t));
-    return;
   }
   video_cb(libretro_frame.p_pixels, w, h, libretro_frame.pitch);
 }
