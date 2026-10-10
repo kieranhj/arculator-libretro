@@ -1,0 +1,7 @@
+[submodule "arculator"]
+	path = arculator
+	url = https://github.com/kieranhj/arculator.git
+	branch = mcp-headless
+[submodule "zlib"]
+	path = zlib
+	url = https://github.com/madler/zlib.git

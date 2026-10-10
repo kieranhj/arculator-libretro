@@ -1,0 +1,7 @@
+obj/
+*.so
+*.dll
+*.dylib
+data_embedded.h
+.zig-cache/
+out/
