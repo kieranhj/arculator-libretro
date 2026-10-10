@@ -45,22 +45,47 @@ submodule; this repository only adds the libretro glue.
 
 ## Speed
 
-Measured on the RG40XXV at 1.5 GHz, emulating one 50 Hz frame, in the
-minimal host (`scripts/rt.c`). Inside RetroArch add about 2.5 ms per frame
-for the RGB565 upload.
+Time to emulate one 50 Hz frame (budget 20 ms) on the RG40XXV at 1.5 GHz,
+measured in the minimal host (`scripts/perf-check.sh`), over 1000 frames
+once each demo is running. "Before" is the unmodified emulator; "after" is
+the `libretro-perf` branch of the Arculator submodule.
 
-| Preset | Content | ms per 20 ms frame |
-|---|---|---|
-| A3000 (ARM2, 8 MHz) | RISC OS boot and desktop | 12 to 13 |
-| A3000 (ARM2, 8 MHz) | Chipo Django 1 musicdisk | 19 to 20 |
-| A3010/A3020 (ARM250, 12 MHz) | Chipo Django 1 | 23 to 24 |
-| A5000 (ARM3, 25 MHz) | Chipo Django 1 | 49 |
+| Content | A3000 (ARM2, 8 MHz) | A3010 (ARM250, 12 MHz) | A5000 (ARM3, 25 MHz) |
+|---|---|---|---|
+| RISC OS desktop | 11.6 → 9.0 | | |
+| Chipo Django 1 | 19.4 → 10.0 | 23.8 → 13.5 | |
+| Tipsy Cube | 16.6 → 11.1 | 21.7 → 15.3 | 41.2 → 31.9 |
+| Push | 14.1 → 10.7 | 18.5 → 14.0 | 39.8 → 32.8 |
+| Mikroreise | 13.1 → 10.1 | 18.2 → 13.9 | 40.8 → 33.3 |
+| Horizon | 13.0 → 10.0 | 15.7 → 12.3 | 39.1 → 32.3 |
 
-So an 8 MHz ARM2 runs at roughly real time when the demo is working hard,
-and a little below it inside RetroArch; the A3020 preset is about 0.85x and
-the A5000 about 0.4x. Build flags that mattered: LTO gave 7%, and Zig's
-default UBSan traps and stack protector cost a few percent more. There has
-been no profiling or work on the interpreter itself yet.
+Inside RetroArch the emulation time is the same, and the frame's upload adds
+1.3 ms. So the A3000 and A3010 presets run at full speed with room to spare;
+the A5000 runs at about 0.6x. Every frame and audio sample of all of these
+was checked to be identical before and after.
+
+What made the difference, found with the sampling profiler in
+`scripts/rt.c` (`RT_PROFILE`) and `scripts/profile.py`:
+
+- Palette writes rebuilt all 276 host colours, with three divisions each.
+  Demos that change the palette per scanline spent a third of their time
+  there. Now a lookup table, and only the entries that depend on the
+  register written are recomputed.
+- The VIDC's bitmap rows were 16 KB apart. At a power-of-two pitch every row
+  maps to the same cache sets on the A53, so the frame never stayed in
+  cache; reading it back at frame end cost 1.5 ms. The rows are now padded,
+  and the core converts each scanline to RGB565 just after it is drawn.
+- The memory timing model's fetch path was an out-of-line call per
+  instruction, and so was the "is any DMA due" test. Both are now inline for
+  the no-cache case.
+- IOC timers 2 and 3, which only clock the serial and keyboard baud rates,
+  were re-armed every period: every 2 us at the keyboard's baud rate. They
+  are now computed when read.
+
+Build flags that mattered: LTO gave 7%, and Zig's default UBSan traps and
+stack protector cost a few percent more. The remaining time is mostly the
+interpreter loop itself and the cycle-accurate memory model; the A5000
+would need a different execution model to reach full speed.
 
 ## How it works
 
@@ -74,8 +99,10 @@ The frontend is the only clock.
 
 The platform backends are chosen at link time, as in Arculator's own build:
 
-- `libretro_video.c` copies the VIDC's visible rectangle straight into a
-  buffer the core owns, instead of composing into a texture.
+- `libretro_video.c` converts each scanline to RGB565 as the VIDC finishes
+  drawing it (through `vidc_line_callback`), and at frame end copies the
+  visible rectangle into a buffer the core owns, instead of composing into a
+  texture.
 - `libretro_sound.c` is a ring buffer behind `sound_givebuffer()`.
 - Arculator's own `headless_input.c` provides `key[]` (indexed by SDL
   scancode) and the mouse; `platform/SDL.h` is a stand-in header holding only
@@ -134,7 +161,10 @@ a broken archive cannot take the frontend down.
 the device over SSH, grab a screenshot, and report CPU use and speed.
 RetroArch's video upload blocks on the panel's 60 Hz vsync, so the wall-clock
 benchmark caps near 1.1x; the "frame avg us" lines the core logs are the
-real measure. `scripts/dev.py` is a tiny paramiko helper for devices whose
+real measure. `scripts/perf-check.sh` runs a fixed set of workloads in the
+minimal host and prints each one's time per frame and a hash of every frame
+and audio sample: an optimisation that leaves the hashes unchanged has not
+changed the emulation. `scripts/dev.py` is a tiny paramiko helper for devices whose
 SFTP subsystem cannot write under `/opt`.
 
 ## Licence

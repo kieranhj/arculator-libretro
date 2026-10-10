@@ -15,6 +15,7 @@
 #include <signal.h>
 #include <stdarg.h>
 #include <sys/time.h>
+#include <time.h>
 #include <ucontext.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -133,6 +134,24 @@ static unsigned s_w, s_h;
 static size_t s_pitch;
 static unsigned long s_audio_frames;
 static retro_keyboard_event_t s_key_cb;
+static unsigned s_bpp = 4;
+
+/* RT_HASH=1: FNV-1a over every presented frame and every audio sample, so
+ * two builds can be checked for identical emulation. */
+static int s_hash_on;
+static unsigned long long s_video_hash = 1469598103934665603ull;
+static unsigned long long s_audio_hash = 1469598103934665603ull;
+static void
+fnv(unsigned long long* h, const void* p, size_t n) {
+  /* FNV-1a over 64-bit words (then the tail bytes): a byte at a time cost
+   * 3 ms a frame on the A53 and distorted the timings. */
+  const unsigned char* b = (const unsigned char*) p;
+  unsigned long long x = *h, wd;
+  size_t i = 0;
+  for (; i + 8 <= n; i += 8) { memcpy(&wd, b + i, 8); x ^= wd; x *= 1099511628211ull; }
+  for (; i < n; ++i) { x ^= b[i]; x *= 1099511628211ull; }
+  *h = x;
+}
 
 /* RT_KEYS="frame:retrok[:hold],..." presses host key <retrok> (a RETROK_*
  * number) at <frame> and releases it <hold> frames later (default 3). */
@@ -162,7 +181,13 @@ static bool env_cb(unsigned cmd, void* data) {
   case RETRO_ENVIRONMENT_GET_LOG_INTERFACE:
     ((struct retro_log_callback*) data)->log = log_cb; return true;
   case RETRO_ENVIRONMENT_SET_PIXEL_FORMAT:
-    return *(enum retro_pixel_format*) data == RETRO_PIXEL_FORMAT_XRGB8888;
+    /* RT_RGB565=1 accepts RGB565 the way RetroArch does; otherwise XRGB8888
+     * only, so the dumped frame is always 32 bpp. */
+    if (*(enum retro_pixel_format*) data == RETRO_PIXEL_FORMAT_RGB565 && getenv("RT_RGB565")) {
+      s_bpp = 2; return true;
+    }
+    if (*(enum retro_pixel_format*) data == RETRO_PIXEL_FORMAT_XRGB8888) { s_bpp = 4; return true; }
+    return false;
   case RETRO_ENVIRONMENT_GET_VARIABLE: {
     struct retro_variable* v = (struct retro_variable*) data;
     int i;
@@ -204,10 +229,17 @@ static bool env_cb(unsigned cmd, void* data) {
 
 static void video_cb(const void* data, unsigned w, unsigned h, size_t pitch) {
   if (data) { s_frame = data; s_w = w; s_h = h; s_pitch = pitch; }
+  if (data && s_hash_on) {
+    unsigned y;
+    fnv(&s_video_hash, &w, sizeof(w));
+    fnv(&s_video_hash, &h, sizeof(h));
+    for (y = 0; y < h; ++y) fnv(&s_video_hash, (const char*) data + y * pitch, (size_t) w * s_bpp);
+  }
 }
 static int s_audio_peak;
 static size_t audio_batch_cb(const int16_t* d, size_t frames) {
   size_t i;
+  if (s_hash_on) fnv(&s_audio_hash, d, frames * 4);
   for (i = 0; i < frames * 2; ++i) { int v = d[i] < 0 ? -d[i] : d[i]; if (v > s_audio_peak) s_audio_peak = v; }
   s_audio_frames += frames; return frames;
 }
@@ -268,12 +300,26 @@ int main(int argc, char** argv) {
     const char* p_sleep = getenv("RT_SLEEP_US");
     const char* p_start = getenv("RT_START_SLEEP_US");
     long sleep_us = p_sleep ? atol(p_sleep) : 0;
+    /* RT_TIME_FROM=n: report the mean retro_run() time over frames n.. (the
+     * boot is mostly idle and would flatter the figure). */
+    const char* p_from = getenv("RT_TIME_FROM");
+    int time_from = p_from ? atoi(p_from) : 0;
+    struct timespec t0, t1;
+    s_hash_on = getenv("RT_HASH") != NULL;
     if (p_start) usleep(atol(p_start));
+    t0.tv_sec = 0; t0.tv_nsec = 0;
     for (i = 0; i < frames; ++i) {
+      if (i == time_from) clock_gettime(CLOCK_MONOTONIC, &t0);
       inject_keys(i);
       retro_run();
       if (sleep_us > 0) usleep(sleep_us);
     }
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    if (frames > time_from)
+      fprintf(stderr, "time: %.3f ms/frame over frames %d-%d\n",
+              ((t1.tv_sec - t0.tv_sec) * 1e3 + (t1.tv_nsec - t0.tv_nsec) / 1e6) / (frames - time_from),
+              time_from, frames - 1);
+    if (s_hash_on) fprintf(stderr, "hash: video %016llx audio %016llx\n", s_video_hash, s_audio_hash);
   }
   if (getenv("RT_PROFILE")) prof_stop(getenv("RT_PROFILE"));
   fprintf(stderr, "ran %d frames, %lu audio frames (peak %d), last frame %ux%u pitch %zu\n",
@@ -283,7 +329,7 @@ int main(int argc, char** argv) {
     unsigned hdr[4] = { s_w, s_h, (unsigned) s_pitch, 0 };
     unsigned y;
     fwrite(hdr, sizeof(hdr), 1, f);
-    for (y = 0; y < s_h; ++y) fwrite((const char*) s_frame + y * s_pitch, 4, s_w, f);
+    for (y = 0; y < s_h; ++y) fwrite((const char*) s_frame + y * s_pitch, s_bpp, s_w, f);
     fclose(f);
   }
   retro_unload_game();

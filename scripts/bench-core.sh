@@ -3,11 +3,14 @@
 # audio sync disabled and time it. Speed = (N/50) / seconds; 1.0 = real time.
 # RetroArch's video upload still blocks on the panel's 60 Hz vsync, so this
 # caps near 1.1x; the "frame avg us" lines in the log are the real measure.
-#   scripts/bench-core.sh [so] [disc] [frames]
+#   [MACHINE=A3010/A3020] scripts/bench-core.sh [so] [disc] [frames]
+# MACHINE runs with a private copy of the core options in /tmp, so the
+# options installed on the device are not touched.
 set -euo pipefail
 HOST="${RG_HOST:-root@192.168.1.175}"
 SO="${1:-out/arculator_libretro.so}"
-DISC="${2:-/mnt/sdcard/ROMS/Archimedes/bs-django01.adf}"
+DISC="${2:-/mnt/sdcard/ROMS/Archimedes/Bitshifters/bs-django01.adf}"
+MACHINE="${MACHINE:-}"
 N="${3:-1500}"
 
 scp -q -O -o BatchMode=yes "$SO" "$HOST:/tmp/arcbench.so"
@@ -20,6 +23,10 @@ ssh -o BatchMode=yes "$HOST" "
   # muOS's launcher sets the governor; a bare retroarch would run at the idle 480 MHz.
   G=\$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor); echo performance > /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
   printf 'video_vsync = \"false\"\naudio_sync = \"false\"\nvideo_frame_delay = \"0\"\nfastforward_ratio = \"0.0\"\nvideo_font_enable = \"false\"\n' > /tmp/bench.cfg
+  if [ -n '$MACHINE' ]; then
+    sed 's|^arculator_machine = .*|arculator_machine = \"$MACHINE\"|' /opt/muos/share/info/config/arculator/arculator.opt > /tmp/bench.opt
+    printf 'core_options_path = \"/tmp/bench.opt\"\nglobal_core_options = \"true\"\ngame_specific_options = \"false\"\n' >> /tmp/bench.cfg
+  fi
   cd /tmp
   S=\$(date +%s.%N)
   timeout -s KILL 180 retroarch -f \$RA_ARGS --appendconfig=/tmp/bench.cfg --max-frames=$N -L /tmp/arcbench.so '$DISC' > /tmp/bench.log 2>&1 || true
