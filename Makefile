@@ -4,6 +4,7 @@
 ARC ?= ./arculator
 SRC := $(ARC)/src
 ZLIB ?= ./zlib
+NSPARK ?= ./nspark
 CC ?= cc
 TARGET := arculator_libretro.so
 
@@ -44,7 +45,13 @@ LOCAL_C := core.c libretro_video.c libretro_sound.c
 ZLIB_C := adler32.c compress.c crc32.c deflate.c gzclose.c gzlib.c gzread.c gzwrite.c infback.c inffast.c inflate.c inftrees.c trees.c uncompr.c zutil.c
 
 OBJDIR := obj
-OBJS := $(addprefix $(OBJDIR)/arc/, $(ARC_C:.c=.o)) $(addprefix $(OBJDIR)/zlib/, $(ZLIB_C:.c=.o)) $(addprefix $(OBJDIR)/, $(LOCAL_C:.c=.o))
+# nspark unpacks Spark/ArcFS archives (,ddc) into HostFS, as archi.medes.live
+# does. Its main() becomes nspark_main() and its generic names are prefixed so
+# they cannot collide with Arculator's.
+NSPARK_C := arcfs.c compress.c crc.c date.c error.c garble.c io.c misc.c pack.c store.c unix.c arc.c main.c unarc.c
+NSPARK_FLAGS := -DPOSIX -I$(NSPARK) -Dmain=nspark_main -Derror=nspark_error -Dwarning=nspark_warning   -Dbasename=nspark_basename -Dfilesize=nspark_filesize -Dread_header=nspark_read_header -Ddebug=nspark_debug -Duncompress=nspark_uncompress -Dcompress=nspark_compress -Dmsg=nspark_msg -Dexit=nspark_exit
+
+OBJS := $(addprefix $(OBJDIR)/arc/, $(ARC_C:.c=.o)) $(addprefix $(OBJDIR)/zlib/, $(ZLIB_C:.c=.o)) $(addprefix $(OBJDIR)/nspark/, $(NSPARK_C:.c=.o)) $(addprefix $(OBJDIR)/, $(LOCAL_C:.c=.o))
 
 PYTHON ?= python3
 
@@ -61,6 +68,10 @@ $(TARGET): $(OBJS)
 $(OBJDIR)/arc/%.o: $(SRC)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(OBJDIR)/nspark/%.o: $(NSPARK)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(NSPARK_FLAGS) -Wno-implicit-fallthrough -c -o $@ $<
 
 $(OBJDIR)/zlib/%.o: $(ZLIB)/%.c
 	@mkdir -p $(dir $@)

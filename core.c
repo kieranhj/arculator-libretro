@@ -38,7 +38,9 @@
 #include "libretro_video.h"
 #include "data_embedded.h"
 
+#include <dirent.h>
 #include <errno.h>
+#include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -185,6 +187,7 @@ static char s_option_desc[k_num_pad_buttons][1024];
 static char s_machine_desc[256];
 static struct retro_variable s_variables[k_num_pad_buttons + 11];
 static int s_rgb565;
+static int s_is_archive;       /* content is a Spark archive unpacked to HostFS */
 static uint16_t* s_frame565;   /* k_max_width * k_max_height, allocated once */
 
 static int
@@ -522,10 +525,91 @@ dir_exists(const char* p_path) {
  * cmos/<machine>-autoboot.<set>.cmos.bin and regenerated on every load, so
  * only the normal image is the user's to edit.
  */
-static const char* k_boot_file_text = "desktop filer_run adfs::0.$.!*\n";
+static const char* k_boot_file_prefix = "desktop filer_run ";
+static const char* k_boot_floppy = "adfs::0.$.!*";
+static const char* k_boot_hostfs = "HostFS:$.Disc.!*";
+
+/* ---- Spark / ArcFS archives ---------------------------------------------- */
+
+/* nspark's main(), renamed at build time. Extracts into the current directory
+ * with ",xxx" filetype suffixes (-T), which is HostFS's naming convention.
+ * nspark is a command-line tool and calls exit() on errors and at the end of
+ * main(); the build renames that to nspark_exit(), which longjmps back here
+ * so a bad archive cannot take the frontend down. */
+int nspark_main(int argc, char** argv);
+static jmp_buf s_nspark_jmp;
+static int s_nspark_active;
+
+void
+nspark_exit(int code) {
+  if (s_nspark_active) longjmp(s_nspark_jmp, code + 1);
+  exit(code);
+}
 
 static int
-prepare_autoboot(const struct preset* p_preset, int fdc) {
+is_archive_path(const char* p_path) {
+  const char* p_base = strrchr(p_path, '/');
+  const char* p_ext;
+  size_t n;
+  p_base = p_base ? p_base + 1 : p_path;
+  n = strlen(p_base);
+  if (n > 4 && !strcasecmp(p_base + n - 4, ",ddc")) return 1;
+  p_ext = strrchr(p_base, '.');
+  if (!p_ext) return 0;
+  return !strcasecmp(p_ext, ".ddc") || !strcasecmp(p_ext, ".spk") || !strcasecmp(p_ext, ".spark") || !strcasecmp(p_ext, ".arc");
+}
+
+static void
+rm_rf(const char* p_dir) {
+  DIR* d = opendir(p_dir);
+  struct dirent* e;
+  if (!d) return;
+  while ((e = readdir(d)) != NULL) {
+    char path[1024];
+    struct stat st;
+    if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+    snprintf(path, sizeof(path), "%s/%s", p_dir, e->d_name);
+    if (lstat(path, &st) == 0 && S_ISDIR(st.st_mode)) rm_rf(path);
+    else unlink(path);
+  }
+  closedir(d);
+  rmdir(p_dir);
+}
+
+/* Unpack a Spark/ArcFS archive into hostfs/Disc, replacing whatever was
+ * there, as archi.medes.live unpacks into the HostFS root. */
+static int
+unpack_archive(const char* p_path) {
+  char dir[1024], cwd[1024];
+  char* argv[] = { "nspark", "-x", "-T", "-q", "-f", NULL, NULL };
+  char abspath[1024];
+  int rc;
+  snprintf(dir, sizeof(dir), "%shostfs/Disc", exname);
+  rm_rf(dir);
+  if (mkdir_p(dir)) {
+    log_cb(RETRO_LOG_ERROR, "arculator: cannot create %s: %s\n", dir, strerror(errno));
+    return -1;
+  }
+  if (!getcwd(cwd, sizeof(cwd))) cwd[0] = 0;
+  if (p_path[0] != '/' && cwd[0]) snprintf(abspath, sizeof(abspath), "%s/%s", cwd, p_path);
+  else snprintf(abspath, sizeof(abspath), "%s", p_path);
+  argv[5] = abspath;
+  if (chdir(dir)) {
+    log_cb(RETRO_LOG_ERROR, "arculator: cannot enter %s: %s\n", dir, strerror(errno));
+    return -1;
+  }
+  s_nspark_active = 1;
+  rc = setjmp(s_nspark_jmp);
+  if (rc == 0) rc = nspark_main(6, argv);
+  else rc -= 1;
+  s_nspark_active = 0;
+  if (cwd[0]) chdir(cwd);
+  log_cb(rc ? RETRO_LOG_ERROR : RETRO_LOG_INFO, "arculator: nspark %s -> %s (rc=%d)\n", abspath, dir, rc);
+  return rc ? -1 : 0;
+}
+
+static int
+prepare_autoboot(const struct preset* p_preset, int fdc, const char* p_target) {
   char src[1024], dst[1024], boot[1024];
   const char* p_set = fdc ? "riscos3_new" : "riscos3_old";
   uint8_t cmos[256];
@@ -567,8 +651,9 @@ prepare_autoboot(const struct preset* p_preset, int fdc) {
     log_cb(RETRO_LOG_WARN, "arculator: cannot write %s: %s\n", boot, strerror(errno));
     return -1;
   }
-  fputs(k_boot_file_text, f);
+  fprintf(f, "%s%s\n", k_boot_file_prefix, p_target);
   fclose(f);
+  log_cb(RETRO_LOG_INFO, "arculator: auto-run: %s%s\n", k_boot_file_prefix, p_target);
   return 0;
 }
 
@@ -585,7 +670,7 @@ remove_autoboot_file(void) {
   memset(buf, 0, sizeof(buf));
   fread(buf, 1, sizeof(buf) - 1, f);
   fclose(f);
-  if (!strcmp(buf, k_boot_file_text)) unlink(boot);
+  if (!strncmp(buf, k_boot_file_prefix, strlen(k_boot_file_prefix))) unlink(boot);
 }
 
 /* Build the machine configuration. A user file at configs/<preset>.cfg under
@@ -595,7 +680,7 @@ remove_autoboot_file(void) {
 static char s_tmp_cfg[1024];
 
 static int
-write_machine_config(const struct preset* p_preset, int autoboot) {
+write_machine_config(const struct preset* p_preset, const char* p_autoboot) {
   const char* p;
   int cpu = p_preset->cpu_type;
   int mem = 4096;
@@ -609,7 +694,7 @@ write_machine_config(const struct preset* p_preset, int autoboot) {
   snprintf(machine_config_file, sizeof(machine_config_file), "%sconfigs/%s.cfg", exname, p_preset->p_cfg_name);
   /* machine_config_name selects the per-machine CMOS image; the auto-boot
    * variant is a derived file, see prepare_autoboot(). */
-  if (autoboot && prepare_autoboot(p_preset, fdc) == 0) {
+  if (p_autoboot && prepare_autoboot(p_preset, fdc, p_autoboot) == 0) {
     snprintf(machine_config_name, sizeof(machine_config_name), "%s-autoboot", p_preset->p_cfg_name);
   } else {
     remove_autoboot_file();
@@ -716,7 +801,7 @@ retro_get_system_info(struct retro_system_info* info) {
   memset(info, 0, sizeof(*info));
   info->library_name = "arculator";
   info->library_version = "0.1";
-  info->valid_extensions = "adf|adl|apd|fdi|hfe|jfd|scp|ssd|dsd";
+  info->valid_extensions = "adf|adl|apd|fdi|hfe|jfd|scp|ssd|dsd|ddc|spk|spark|arc";
   info->need_fullpath = true;
   info->block_extract = true;
 }
@@ -797,9 +882,14 @@ retro_load_game(const struct retro_game_info* info) {
   config_persist_enabled = 0;
 
   {
-    int autoboot = info && info->path && *info->path &&
-                   !strcmp(get_option("arculator_autoboot", "enabled"), "enabled");
-    if (write_machine_config(p_preset, autoboot)) return false;
+    const char* p_autoboot = NULL;
+    int has_content = info && info->path && *info->path;
+    s_is_archive = has_content && is_archive_path(info->path);
+    if (s_is_archive && unpack_archive(info->path)) return false;
+    if (has_content && !strcmp(get_option("arculator_autoboot", "enabled"), "enabled")) {
+      p_autoboot = s_is_archive ? k_boot_hostfs : k_boot_floppy;
+    }
+    if (write_machine_config(p_preset, p_autoboot)) return false;
   }
 
   podule_build_list();
@@ -822,7 +912,7 @@ retro_load_game(const struct retro_game_info* info) {
   /* The disc goes in before any cycles run, so an 82C711 machine never sees
    * an empty drive at boot (see CLAUDE.md in the Arculator tree). */
   s_disc_path[0] = 0;
-  if (info && info->path && *info->path) {
+  if (info && info->path && *info->path && !s_is_archive) {
     snprintf(s_disc_path, sizeof(s_disc_path), "%s", info->path);
     arc_disc_change(0, s_disc_path);
     log_cb(RETRO_LOG_INFO, "arculator: disc 0 = %s\n", s_disc_path);

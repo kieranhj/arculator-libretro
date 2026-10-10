@@ -1,7 +1,7 @@
 # Software Information
 display_name = "Acorn - Archimedes (Arculator)"
 authors = "Sarah Walker|Kieran Connell"
-supported_extensions = "adf|adl|apd|fdi|hfe|jfd|scp|ssd|dsd"
+supported_extensions = "adf|adl|apd|fdi|hfe|jfd|scp|ssd|dsd|ddc|spk|spark|arc"
 corename = "arculator"
 categories = "Emulator"
 license = "GPLv2"

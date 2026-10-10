@@ -5,3 +5,6 @@
 [submodule "zlib"]
 	path = zlib
 	url = https://github.com/madler/zlib.git
+[submodule "nspark"]
+	path = nspark
+	url = https://github.com/pdjstone/nspark-wasm.git

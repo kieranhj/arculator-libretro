@@ -18,6 +18,11 @@ submodule; this repository only adds the libretro glue.
   controller and monitor type as separate core options.
 - Disc images in any format Arculator reads: `.adf`, `.adl`, `.apd`,
   `.fdi`, `.hfe`, `.jfd`, `.scp`, `.ssd`, `.dsd`.
+- Spark and ArcFS archives (`.ddc`, `.spk`, `.arc`, or a RISC OS style
+  `name,ddc`), the form most Archimedes software is distributed in. The
+  archive is unpacked with nspark into `hostfs/Disc` and run from HostFS,
+  again as archi.medes.live does. Frontends pick content by extension, so
+  name a `,ddc` download `name.ddc`.
 - Auto-running a disc. RISC OS is configured to boot from HostFS, where the
   core writes a `!Boot` Obey file that starts the desktop and Filer_Runs the
   first `!` object on the floppy, which is the disc's `!Boot` if it has one
@@ -119,7 +124,11 @@ sysroot needed:
 
 The output is `out/arculator_libretro.so` plus the `.info` file. See
 `device/muos/README.md` for installing on muOS. zlib is bundled as a
-submodule for the compressed `.apd` and `.jfd` formats.
+submodule for the compressed `.apd` and `.jfd` formats, and
+[nspark](https://github.com/pdjstone/nspark-wasm) (the fork archi.medes.live
+uses) for Spark archives. nspark is a command-line tool; its `main()` is
+renamed at build time and its `exit()` calls are routed back to the core, so
+a broken archive cannot take the frontend down.
 
 `scripts/test-core.sh` and `scripts/bench-core.sh` run a core in RetroArch on
 the device over SSH, grab a screenshot, and report CPU use and speed.
@@ -132,3 +141,5 @@ SFTP subsystem cannot write under `/opt`.
 
 GPL version 2, the same as Arculator. See `LICENSE`. Arculator is copyright
 Sarah Walker; the RISC OS ROM images are Acorn's and are not included.
+nspark is free software under the terms in its own `README`, which stays
+intact in the submodule; zlib is under the zlib licence.

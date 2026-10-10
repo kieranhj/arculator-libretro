@@ -23,7 +23,8 @@ Paths below are for muOS "NeXT" (2025). Copy with `scp -O` over SSH (user
 
 4. Put disc images in `ROMS/Archimedes` on the SD card. Any folder name
    listed under `[friendly]` in `global.ini` (arc, archimedes, riscos,
-   acornarchimedes) works.
+   acornarchimedes) works. Spark archives work too; rename a `name,ddc`
+   download to `name.ddc` so muOS lists it.
 
 Launching a disc boots RISC OS 3.11 and runs the disc's `!Boot`, or its
 application if it has none, after about 20 seconds. Turn this off with the
