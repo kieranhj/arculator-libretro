@@ -11,6 +11,7 @@ typedef struct {
   int bpp;                    /* 16 (RGB565) or 32 (XRGB8888) */
   int w, h;                   /* as presented: w is halved for low-res modes when enabled */
   int dblscan;                /* guest asked for each line to be shown twice */
+  int full_w;                 /* w before low-res halving, in the VIDC bitmap's pixels */
   uint64_t frame_count;       /* incremented on every present */
 } libretro_frame_t;
 

@@ -69,6 +69,8 @@ static char s_system_dir[1024];
 static char s_disc_path[1024];
 static int16_t s_audio[k_audio_chunk * 2];
 static unsigned s_last_w, s_last_h;
+static float s_last_aspect;
+static int s_aspect_4_3;
 static uint32_t s_frame_count;
 static int s_log_input;
 
@@ -185,7 +187,7 @@ static int s_display_mode;
 static char s_option_keys[k_num_pad_buttons][32];
 static char s_option_desc[k_num_pad_buttons][1024];
 static char s_machine_desc[256];
-static struct retro_variable s_variables[k_num_pad_buttons + 12];
+static struct retro_variable s_variables[k_num_pad_buttons + 16];
 static int s_rgb565;
 static int s_is_archive;       /* content is a Spark archive unpacked to HostFS */
 
@@ -251,6 +253,9 @@ build_variables(void) {
   s_variables[i].key = "arculator_lowres_width";
   s_variables[i].value = "Low-res mode width (restart); Native|Doubled";
   i++;
+  s_variables[i].key = "arculator_aspect";
+  s_variables[i].value = "Aspect ratio; Screen mode|4:3";
+  i++;
   s_variables[i].key = "arculator_display";
   s_variables[i].value = "Display area; No borders|Native borders|TV";
   i++;
@@ -288,6 +293,7 @@ read_live_options(void) {
     s_pad_key[i] = key_from_name(get_option(s_option_keys[i], s_pad_buttons[i].p_default));
   }
   s_dpad_mode = !strcmp(get_option("arculator_dpad", "Cursor keys"), "Mouse") ? k_dpad_mouse : k_dpad_cursor;
+  s_aspect_4_3 = !strcmp(get_option("arculator_aspect", "Screen mode"), "4:3");
   p = get_option("arculator_mouse_speed", "Normal");
   if (!strcmp(p, "Slow")) s_mouse_speed = 3 << 16;
   else if (!strcmp(p, "Fast")) s_mouse_speed = 12 << 16;
@@ -815,7 +821,7 @@ retro_get_system_av_info(struct retro_system_av_info* info) {
   info->geometry.base_height = s_last_h ? s_last_h : 256;
   info->geometry.max_width = k_max_width;
   info->geometry.max_height = k_max_height;
-  info->geometry.aspect_ratio = 4.0f / 3.0f;
+  info->geometry.aspect_ratio = s_last_aspect > 0.0f ? s_last_aspect : 4.0f / 3.0f;
   info->timing.fps = (double) k_fps;
   info->timing.sample_rate = (double) k_sample_rate;
 }
@@ -921,6 +927,7 @@ retro_load_game(const struct retro_game_info* info) {
   }
 
   s_last_w = s_last_h = 0;
+  s_last_aspect = 0.0f;
   s_frame_count = 0;
   s_mouse_acc_x = s_mouse_acc_y = 0;
   memset(s_pad_down, 0, sizeof(s_pad_down));
@@ -1068,9 +1075,22 @@ drain_audio(void) {
   }
 }
 
+/* The shape of the picture on the monitor. RISC OS treats the VIDC bitmap's
+ * pixels as square (its OS units are, and low-res modes are drawn doubled
+ * into it), with 15 kHz modes shown line doubled: 320x256 is 5:4, 640x480 is
+ * 4:3 and a 320x180 demo mode is 16:9. The "4:3" option stretches every mode
+ * to the full monitor instead, as before. */
+static float
+frame_aspect(void) {
+  int full_h = libretro_frame.h * (libretro_frame.dblscan ? 2 : 1);
+  if (s_aspect_4_3 || libretro_frame.full_w <= 0 || full_h <= 0) return 4.0f / 3.0f;
+  return (float) libretro_frame.full_w / (float) full_h;
+}
+
 static void
 present(void) {
   unsigned w, h;
+  float aspect;
   if (!libretro_frame.valid) {
     video_cb(NULL, s_last_w ? s_last_w : 640, s_last_h ? s_last_h : 256, 0);
     return;
@@ -1079,17 +1099,19 @@ present(void) {
   h = (unsigned) libretro_frame.h;
   if (w > k_max_width) w = k_max_width;
   if (h > k_max_height) h = k_max_height;
-  if (w != s_last_w || h != s_last_h) {
+  aspect = frame_aspect();
+  if (w != s_last_w || h != s_last_h || aspect != s_last_aspect) {
     struct retro_game_geometry geom;
     geom.base_width = w;
     geom.base_height = h;
     geom.max_width = k_max_width;
     geom.max_height = k_max_height;
-    geom.aspect_ratio = 4.0f / 3.0f;
+    geom.aspect_ratio = aspect;
     environ_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &geom);
-    log_cb(RETRO_LOG_INFO, "arculator: geometry %ux%u dblscan=%d\n", w, h, libretro_frame.dblscan);
+    log_cb(RETRO_LOG_INFO, "arculator: geometry %ux%u dblscan=%d aspect=%.3f\n", w, h, libretro_frame.dblscan, aspect);
     s_last_w = w;
     s_last_h = h;
+    s_last_aspect = aspect;
   }
   {
     /* Debug aid: ARCULATOR_DUMP_FRAME=<path> writes the frame given to the

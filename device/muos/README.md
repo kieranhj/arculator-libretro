@@ -19,7 +19,10 @@ Paths below are for muOS "NeXT" (2025). Copy with `scp -O` over SSH (user
 
 3. Tell muOS about the system. Create
    `/opt/muos/share/info/assign/Acorn Archimedes/` containing `global.ini`
-   and `arculator.ini` from this folder.
+   and `arculator.ini` from this folder, and copy `arculator.cfg` to
+   `/opt/muos/share/info/config/arculator/`. muOS sets RetroArch to stretch
+   every core to the full panel; that override makes it use the aspect
+   ratio of the Archimedes screen mode instead.
 
 4. Put disc images in `ROMS/Archimedes` on the SD card. Any folder name
    listed under `[friendly]` in `global.ini` (arc, archimedes, riscos,

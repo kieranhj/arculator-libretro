@@ -245,6 +245,7 @@ void video_renderer_present(int src_x, int src_y, int src_w, int src_h, int dbls
   if (src_h < 0) src_h = 0;
   if (src_x + src_w > FB_W) src_w = FB_W - src_x;
   if (src_y + src_h > FB_H) src_h = FB_H - src_y;
+  libretro_frame.full_w = src_w;
   if (s_halved) { src_x /= 2; src_w /= 2; }
   libretro_frame.bpp = bpp * 8;
   libretro_frame.pitch = s_fb_pitch;

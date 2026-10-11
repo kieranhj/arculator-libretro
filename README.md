@@ -35,7 +35,11 @@ submodule; this repository only adds the libretro glue.
   option, the mouse.
 - Sound at 48 kHz stereo, produced in lockstep with the emulation.
 - RGB565 or XRGB8888 output. The frame handed to the frontend is the VIDC's
-  active rectangle only, with the screen's own aspect ratio of 4:3.
+  active rectangle only. Its aspect ratio follows the screen mode, the way
+  RISC OS sees it: 320x256 and 640x256 are 5:4, 640x480 is 4:3, and a demo's
+  320x180 mode is 16:9. The "Aspect ratio" option set to 4:3 stretches every
+  mode to fill the monitor instead. The frontend has to be set to use the
+  core's aspect ratio (RetroArch's "Core provided").
 
 ## Not yet
 
